@@ -5,10 +5,10 @@ let gameOptions = {
     platformStartSpeed: 350,
     spawnRange: [100, 350],
     platformSizeRange: [50, 250],
-    playerGravity: 1000,
-    jumpForce: 400,
-    playerStartPosition: 200,
-    jumps: 2,
+    //playerGravity: 1000,
+    //jumpForce: 400,
+    //playerStartPosition: 200,
+    //jumps: 2,
     trainingAI: false
 };
 
@@ -36,20 +36,106 @@ window.onload = function() {
     window.addEventListener("resize", resize, false);
 };
 
+class Player { 
+
+    constructor(scene, ai){
+
+        this.scene = scene;
+        this.ai = ai;
+
+        //defaults 
+        this.playerGravity = 1000;
+        this.startPosition = 200;
+        this.maxJumps = 2;
+        this.jumpForce = 400;
+
+        // number of consecutive jumps made by the player
+        this.jumps = 0;
+        
+        // adding the player;
+        this.sprite = scene.physics.add.sprite(this.startPosition, scene.game.config.height / 2, "player");
+        this.sprite.setGravityY(this.playerGravity);
+
+        // setting collisions between the player and the platform group
+        scene.physics.add.collider(this.sprite, scene.platformGroup);
+
+        // checking for input
+        //scene.input.on("pointerdown", this.jump, this);
+
+        this.sprite.setTint(this.generateRandomColor());
+    }
+
+    update(time, delta){
+        this.sprite.x = this.startPosition;
+
+        if (this.nextPlatform && this.sprite.getBounds().right > this.nextPlatform.getBounds().left){
+            this.nextPlatform = null;
+        }
+
+        let nextStart = 5000;
+        if (this.nextPlatform) {
+            nextStart = this.nextPlatform.getBounds().left;
+        }
+        this.scene.platformGroup.children.iterate((platform) => {
+            const platStart = platform.getBounds().left;
+            if ((platStart > this.sprite.getBounds().right && platStart < nextStart)){
+                this.nextPlatform = platform;
+                return;
+            }            
+        });
+    
+        if (this.nextPlatform){
+            const command = this.ai.run(
+                { 
+                    speed: 350, 
+                    distance: this.nextPlatform.getBounds().left - this.sprite.getBounds().right, 
+                    height: this.sprite.y 
+                });
+            console.log('JUMP:' + command.jump+' height:' + this.sprite.y + ' distance:' + (this.nextPlatform.getBounds().left - this.sprite.getBounds().right));
+            if (command.jump > 0){
+                this.jump(time, delta);
+            }
+        }
+        
+    }
+
+    // the player jumps when on the ground, or once in the air as long as there are jumps left and the first jump was on the ground
+    jump(time, delta){
+        if (this.sprite.body.touching.down || (this.jumps > 0 && this.jumps < this.maxJumps)){
+            if (this.sprite.body.touching.down){
+                this.jumps = 0;
+            }
+            const timeElapsed = time ? time : 1;
+            this.sprite.setVelocityY(this.jumpForce * timeElapsed * -1);
+            this.jumps ++;
+        }
+    }
+
+    generateRandomColor(){
+        return Math.random()*0xFFFFFF<<0;
+    }
+}
+
 // playGame scene
 class playGame extends Phaser.Scene {
+
     constructor(){
         super("PlayGame");
     }
+
     preload(){
         this.load.image("platform", "platform.png");
         this.load.image("player", "player.png");
 
         this._ai = new RunnerNeuralNetwork();
+        this.trainAI();
+    }
+
+    trainAI(){
         this._ai.train(); 
     }
-    create(){
 
+    create(){
 
         this.debug = {};
 
@@ -64,8 +150,9 @@ class playGame extends Phaser.Scene {
             'Player X:  %2\n' +
             'Player Y:  %3\n' + 
             'Distance:  %4\n' +
-            'Guess:     %5\n' +
-            'Jump:      %6\n'
+            'Jump:      %5\n' +
+            'Idle:      %6\n' +
+            'Action:    %7\n'
         );
 
         this.debug.caption = this.add.text(16, 16, '', this.debug.captionStyle);
@@ -89,21 +176,14 @@ class playGame extends Phaser.Scene {
             }
         });
 
-        // number of consecutive jumps made by the player
-        this.playerJumps = 0;
-
         // adding a platform to the game, the arguments are platform width and x position
         this.addPlatform(game.config.width, game.config.width / 2);
 
-        // adding the player;
-        this.player = this.physics.add.sprite(gameOptions.playerStartPosition, game.config.height / 2, "player");
-        this.player.setGravityY(gameOptions.playerGravity);
-
-        // setting collisions between the player and the platform group
-        this.physics.add.collider(this.player, this.platformGroup);
-
-        // checking for input
-        this.input.on("pointerdown", this.jump, this);
+        this.players = [];
+        while(this.players.length < 1){
+            this.players.push(new Player(this, this._ai));
+        }
+        
     }
 
     // the core of the script: platform are added from the pool or created on the fly
@@ -116,37 +196,28 @@ class playGame extends Phaser.Scene {
             platform.visible = true;
             this.platformPool.remove(platform);
         } else {
+            const timeElapsed = this.time.physicsElapsed ? this.time.physicsElapsed : 1;
             platform = this.physics.add.sprite(posX, game.config.height * 0.8, "platform");
             platform.setImmovable(true);
-            platform.setVelocityX(gameOptions.platformStartSpeed * -1);
+            platform.setVelocityX(gameOptions.platformStartSpeed * timeElapsed * -1);
             this.platformGroup.add(platform);
         }
         platform.displayWidth = platformWidth;
         this.nextPlatformDistance = Phaser.Math.Between(gameOptions.spawnRange[0], gameOptions.spawnRange[1]);
     }
 
-    // the player jumps when on the ground, or once in the air as long as there are jumps left and the first jump was on the ground
-    jump(){
-        if(this.player.body.touching.down || (this.playerJumps > 0 && this.playerJumps < gameOptions.jumps)){
-            if(this.player.body.touching.down){
-                this.playerJumps = 0;
-            }
-            this.player.setVelocityY(gameOptions.jumpForce * -1);
-            this.playerJumps ++;
-        }
-    }
-
-    update(){
-
+    update(time, delta){
+        
         // game over
-        if (this.player.y > game.config.height){
+        if (this.players[0].sprite.y > game.config.height){
             this.scene.start("PlayGame");
         }
-        this.player.x = gameOptions.playerStartPosition;
+
+        this.players[0].update();
 
         this.setupPlatforms();
 
-        if (this.player.nextPlatform && this.player.getBounds().right > this.player.nextPlatform.getBounds().left){
+        /*if (this.player.nextPlatform && this.player.getBounds().right > this.player.nextPlatform.getBounds().left){
             this.player.nextPlatform = null;
         }
 
@@ -160,21 +231,21 @@ class playGame extends Phaser.Scene {
                 this.player.nextPlatform = platform;
                 return;
             }            
-        });
+        });*/
 
         this.debug.graphics.clear();
         this.debug.graphics.lineStyle(2, 0xff0000);
-        this.debug.graphics.strokeRectShape(this.player.nextPlatform.getBounds());
+        //this.debug.graphics.strokeRectShape(this.player.nextPlatform.getBounds());
     
         //console.log(this.player.x + '-' +this.player.y + '-' + this.nextPlatformDistance +'-');
-        const command = this._ai.run(
+        /*const command = this._ai.run(
             { 
                 speed: 350, 
                 distance: this.player.nextPlatform.getBounds().left - this.player.getBounds().right, 
                 height: this.player.y 
             });
-        if (command.move > 0.9){
-            this.jump();
+        if (command.jump > 0){
+            //this.jump();
         }
 
         this.debug.caption.setText(Phaser.Utils.String.Format(this.debug.captionTextFormat, [
@@ -182,9 +253,10 @@ class playGame extends Phaser.Scene {
             this.player.getBounds().right,
             this.player.y,
             this.player.nextPlatform.getBounds().left - this.player.getBounds().right,
-            command.move,
-            command.move > 0.9 ? "jump" : "idle"
-        ]));
+            command.jump,
+            command.idle,
+            command.jump > 0 ? "jump" : "idle"
+        ]));*/
     }
 
     setupPlatforms(){
